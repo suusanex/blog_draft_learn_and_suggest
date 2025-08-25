@@ -1,0 +1,61 @@
+﻿<Page
+    x:Class="blog_draft_learn_and_suggest.Views.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:i="using:Microsoft.Xaml.Interactivity"
+    xmlns:controls="using:CommunityToolkit.WinUI.Controls"
+    Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+    mc:Ignorable="d">
+
+    <Grid x:Name="ContentArea">
+        <i:Interaction.Behaviors>
+            <i:EventTriggerBehavior EventName="Loaded">
+                <i:InvokeCommandAction Command="{x:Bind ViewModel.LoadedCommand}" />
+            </i:EventTriggerBehavior>
+        </i:Interaction.Behaviors>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <controls:DockPanel Grid.Row="0">
+            <!-- モデル選択 ComboBox -->
+            <TextBlock controls:DockPanel.Dock="Top" Margin="5" Text="まず、使用するモデルを選択してください。OpenAI の場合はロード不要です。" />
+            <controls:DockPanel Dock="Top">
+                <!-- モデルセレクタ & ロードボタン行 -->
+                <ComboBox controls:DockPanel.Dock="Left"
+                          Margin="16"
+                          ItemsSource="{x:Bind ViewModel.ModelList, Mode=OneWay}"
+                          SelectedItem="{x:Bind ViewModel.SelectedModel, Mode=TwoWay}"
+                          DisplayMemberPath="DisplayName"
+                          PlaceholderText="Select model..." />
+                <Button controls:DockPanel.Dock="Right"
+                        Margin="16"
+                        Command="{x:Bind ViewModel.LoadSelectedModelCommand}"
+                        Content="モデルロード"
+                        IsEnabled="{x:Bind ViewModel.IsEnableLoadModel, Mode=OneWay}" />
+            </controls:DockPanel>
+            <TextBlock controls:DockPanel.Dock="Top" Margin="5" Text="チャットの内容を入力したら Send を押してください。Foundry Local はモデルロード後に有効化されます。" />
+            <Button controls:DockPanel.Dock="Bottom"
+                    Margin="16"
+                    Command="{x:Bind ViewModel.SendCommand}"
+                    Content="Send" />
+            <TextBox controls:DockPanel.Dock="Top"
+                     Margin="16"
+                     Text="{x:Bind ViewModel.Input, Mode=TwoWay}"
+                     PlaceholderText="Type your message here..."
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap" />
+        </controls:DockPanel>
+        <Grid Grid.Row="1">
+            <controls:DockPanel>
+                <TextBlock controls:DockPanel.Dock="Top" Margin="16" Text="{x:Bind ViewModel.ProgressStr, Mode=TwoWay}"></TextBlock>
+                <TextBox controls:DockPanel.Dock="Top" Margin="16" Text="{x:Bind ViewModel.Result, Mode=TwoWay}" IsReadOnly="True" TextWrapping="Wrap"></TextBox>
+            </controls:DockPanel>
+
+        </Grid>
+        
+    </Grid>
+</Page>

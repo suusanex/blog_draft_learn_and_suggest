@@ -1,0 +1,10 @@
+﻿{
+    "profiles": {
+      "blog_draft_learn_and_suggest (Package)": {
+        "commandName": "MsixPackage"
+      },
+      "blog_draft_learn_and_suggest (Unpackaged)": {
+        "commandName": "Project"
+      }
+    }
+}
