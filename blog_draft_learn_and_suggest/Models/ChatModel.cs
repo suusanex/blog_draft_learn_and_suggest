@@ -1,14 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using OpenAI;
+using OpenAI.Chat;
+using System.ClientModel;
 using blog_draft_learn_and_suggest.Services;
 
 namespace blog_draft_learn_and_suggest.Models
@@ -17,15 +16,16 @@ namespace blog_draft_learn_and_suggest.Models
     {
         private bool _disposed;
         private bool _isModelLoaded;
-        private string? _activeDeploymentName;
+        private string? _activeModelName;
         private string? _activeDisplayName;
 
         private readonly IConfiguration _configuration;
-        private readonly HttpClient _httpClient;
         private readonly int _maxTokens;
         private readonly List<ChatMessage> _history = new();
         private readonly RetrievalService _retrieval;
         private readonly ILogger<ChatModel> _logger;
+        private OpenAIClient? _openAIClient;
+        private ChatClient? _chatClient;
 
         public event Action<string>? ProgressChanged;
         public event Action<string>? ResultChanged;
@@ -52,35 +52,48 @@ namespace blog_draft_learn_and_suggest.Models
             _retrieval = retrieval;
             _logger = logger;
 
-            _httpClient = new HttpClient();
-            var timeoutSeconds = _configuration.GetValue<int>("AzureOpenAI:RequestTimeoutSeconds", 0);
-            if (timeoutSeconds > 0)
-            {
-                _httpClient.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
-            }
-
-            _maxTokens = _configuration.GetValue<int>("AzureOpenAI:MaxTokens", 2048);
+            var timeoutSeconds = _configuration.GetValue<int>("OpenAI:RequestTimeoutSeconds", 0);
+            _maxTokens = _configuration.GetValue<int>("OpenAI:MaxTokens", 2048);
 
             _logger.LogInformation("ChatModel created. TimeoutSeconds={TimeoutSeconds}, MaxTokens={MaxTokens}, Provider={Provider}", timeoutSeconds, _maxTokens, Provider);
         }
 
         public Task<List<ModelInfoItem>> GetAvailableModelsAsync()
         {
-            var deployment = _configuration["AzureOpenAI:DeploymentName"] ?? string.Empty;
-            var display = string.IsNullOrEmpty(deployment) ? "(未設定)" : deployment;
+            var model = _configuration["OpenAI:Model"] ?? "gpt-4o-mini";
+            var display = string.IsNullOrEmpty(model) ? "(未設定)" : model;
             var list = new List<ModelInfoItem>
             {
-                new ModelInfoItem { Id = deployment, DisplayName = display, IsCached = true }
+                new ModelInfoItem { Id = model, DisplayName = display, IsCached = true }
             };
-            _logger.LogInformation("Available models loaded. Deployment='{Deployment}', Provider={Provider}", deployment, Provider);
+            _logger.LogInformation("Available models loaded. Model='{Model}', Provider={Provider}", model, Provider);
             return Task.FromResult(list);
         }
 
         public Task LoadOrDownloadModelAsync(string modelId)
         {
-            _activeDeploymentName = modelId;
+            _activeModelName = modelId;
             _activeDisplayName = modelId;
-            // Foundry Local でも OpenAI でも、選択が有効になった時点で送信可能とする（FoundryはUI側で待機制御）。
+
+            // OpenAI クライアントを初期化
+            var apiKey = _configuration["OpenAI:ApiKey"];
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                _logger.LogError("OpenAI ApiKey not configured.");
+                _isModelLoaded = false;
+                return Task.CompletedTask;
+            }
+
+            var options = new OpenAIClientOptions();
+            var timeoutSeconds = _configuration.GetValue<int>("OpenAI:RequestTimeoutSeconds", 0);
+            if (timeoutSeconds > 0)
+            {
+                options.NetworkTimeout = TimeSpan.FromSeconds(timeoutSeconds);
+            }
+
+            _openAIClient = new OpenAIClient(new ApiKeyCredential(apiKey), options);
+            _chatClient = _openAIClient.GetChatClient(modelId);
+
             _isModelLoaded = !string.IsNullOrWhiteSpace(modelId);
 
             _history.Clear();
@@ -89,12 +102,12 @@ namespace blog_draft_learn_and_suggest.Models
             var guide = BuildSystemGuide(styleTitle, styleContent);
             if (!string.IsNullOrWhiteSpace(guide))
             {
-                _history.Add(new ChatMessage { role = "system", content = guide });
+                _history.Add(ChatMessage.CreateSystemMessage(guide));
             }
-            _logger.LogInformation("Model loaded. ActiveDeployment='{Deployment}', HistorySystemMsgLen={Len}", _activeDeploymentName, guide?.Length ?? 0);
+            _logger.LogInformation("Model loaded. ActiveModel='{Model}', HistorySystemMsgLen={Len}", _activeModelName, guide?.Length ?? 0);
             var prov = Provider;
-            var provText = prov == ProviderKind.FoundryLocal ? "Foundry Local" : "Azure OpenAI";
-            ProgressChanged?.Invoke($"{provText} deployment ready: {modelId}");
+            var provText = prov == ProviderKind.FoundryLocal ? "Foundry Local" : "OpenAI";
+            ProgressChanged?.Invoke($"{provText} model ready: {modelId}");
             return Task.CompletedTask;
         }
 
@@ -107,9 +120,9 @@ namespace blog_draft_learn_and_suggest.Models
                 ResultChanged?.Invoke("Input is empty.\n");
                 return;
             }
-            if (!_isModelLoaded || string.IsNullOrWhiteSpace(_activeDeploymentName))
+            if (!_isModelLoaded || string.IsNullOrWhiteSpace(_activeModelName) || _chatClient == null)
             {
-                ResultChanged?.Invoke("No active deployment selected.\n");
+                ResultChanged?.Invoke("No active model selected.\n");
                 return;
             }
 
@@ -148,60 +161,29 @@ namespace blog_draft_learn_and_suggest.Models
                     ? input
                     : $"類似する過去の記事と、新規の記事の概要です。類似する過去の記事も参考にして、新規の記事の下書きを生成してください。\n\n{contextText}\n\n---\n\n新規の記事の概要:\n{input}";
 
-                _history.Add(new ChatMessage { role = "user", content = composedInput });
-
-                var endpoint = _configuration["AzureOpenAI:Endpoint"] ?? string.Empty;
-                var apiKey = _configuration["AzureOpenAI:ApiKey"] ?? string.Empty;
-                var apiVersion = _configuration["AzureOpenAI:ApiVersion"] ?? "2024-06-01";
-                if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(apiKey))
-                {
-                    ResultChanged?.Invoke("AzureOpenAI endpoint/apiKey not configured.\n");
-                    _logger.LogError("AzureOpenAI not configured. Endpoint='{Endpoint}', ApiKeySet={ApiKeySet}", endpoint, !string.IsNullOrEmpty(apiKey));
-                    return;
-                }
-
-                _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                _httpClient.DefaultRequestHeaders.Add("api-key", apiKey);
-
-                var requestPath = $"/openai/deployments/{_activeDeploymentName}/chat/completions?api-version={apiVersion}";
-                var url = new Uri(new Uri(endpoint.TrimEnd('/')), requestPath);
-
-                string payloadJson = BuildChatRequestJson(_history, _maxTokens, _activeDeploymentName);
-                _logger.LogDebug("POST {Url}\nPayload={Payload}", url, payloadJson);
+                _history.Add(ChatMessage.CreateUserMessage(composedInput));
 
                 ResultChanged?.Invoke("[Start]\n");
 
-                using var content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-                using var resp = await _httpClient.PostAsync(url, content);
-                var respText = await resp.Content.ReadAsStringAsync();
-                if (!resp.IsSuccessStatusCode)
+                var options = new ChatCompletionOptions
                 {
-                    ResultChanged?.Invoke($"Error: {(int)resp.StatusCode} {resp.ReasonPhrase}\n{respText}\n");
-                    _logger.LogError("AOAI error {Status}: {Reason}. Body={Body}", (int)resp.StatusCode, resp.ReasonPhrase, respText);
-                    ResultChanged?.Invoke("\n[End]\n");
-                    return;
-                }
+                    MaxOutputTokenCount = _maxTokens
+                };
 
-                try
+                _logger.LogDebug("Sending chat completion request with {MessageCount} messages", _history.Count);
+
+                var completion = await _chatClient.CompleteChatAsync(_history, options);
+                var responseMessage = completion.Value.Content.FirstOrDefault()?.Text;
+
+                if (!string.IsNullOrEmpty(responseMessage))
                 {
-                    var completion = JsonSerializer.Deserialize<ChatCompletionResponse>(respText);
-                    var message = completion?.choices?.FirstOrDefault()?.message?.content;
-                    if (!string.IsNullOrEmpty(message))
-                    {
-                        ResultChanged?.Invoke(message);
-                        _history.Add(new ChatMessage { role = "assistant", content = message });
-                    }
-                    else
-                    {
-                        ResultChanged?.Invoke("(no content)\n");
-                        _logger.LogWarning("Completion parsed but no content. RawBody={Body}", respText);
-                    }
+                    ResultChanged?.Invoke(responseMessage);
+                    _history.Add(ChatMessage.CreateAssistantMessage(responseMessage));
                 }
-                catch (JsonException jex)
+                else
                 {
-                    ResultChanged?.Invoke("Failed to parse response JSON. See logs.\n");
-                    _logger.LogError(jex, "JSON parse failed. RawBody={Body}", respText);
+                    ResultChanged?.Invoke("(no content)\n");
+                    _logger.LogWarning("Completion response has no content.");
                 }
 
                 ResultChanged?.Invoke("\n[End]\n");
@@ -222,63 +204,14 @@ namespace blog_draft_learn_and_suggest.Models
             return string.Join("\n\n", parts);
         }
 
-        private static string BuildChatRequestJson(List<ChatMessage> messages, int maxTokens, string? deploymentName)
-        {
-            var useMaxCompletion = NeedsMaxCompletionTokens(deploymentName);
-            var req = new ChatCompletionRequest
-            {
-                messages = messages,
-                max_tokens = useMaxCompletion ? null : maxTokens,
-                max_completion_tokens = useMaxCompletion ? maxTokens : null,
-            };
-            return JsonSerializer.Serialize(req, JsonOptions);
-        }
-
-        private static bool NeedsMaxCompletionTokens(string? deploymentName)
-        {
-            if (string.IsNullOrWhiteSpace(deploymentName)) return false;
-            var n = deploymentName.ToLowerInvariant();
-            return n.StartsWith("gpt-5");
-        }
-
-        private static readonly JsonSerializerOptions JsonOptions = new()
-        {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        };
-
         public ValueTask DisposeAsync()
         {
             if (!_disposed)
             {
-                _httpClient.Dispose();
+                // OpenAIClient doesn't implement IDisposable, so no disposal needed
                 _disposed = true;
             }
             return ValueTask.CompletedTask;
-        }
-
-        // DTOs
-        private class ChatMessage
-        {
-            public string role { get; set; } = string.Empty;
-            public string content { get; set; } = string.Empty;
-        }
-
-        private class ChatCompletionRequest
-        {
-            public List<ChatMessage> messages { get; set; } = new();
-            public int? max_tokens { get; set; }
-            [JsonPropertyName("max_completion_tokens")] public int? max_completion_tokens { get; set; }
-        }
-
-        private class ChatCompletionResponse
-        {
-            public List<Choice>? choices { get; set; }
-        }
-
-        private class Choice
-        {
-            public ChatMessage? message { get; set; }
         }
     }
 }

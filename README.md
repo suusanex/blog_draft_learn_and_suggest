@@ -12,11 +12,11 @@
 
 ---
 
-## 仕様（Azure OpenAI + Azure AI Search RAG 前提）
+## 仕様（OpenAI + Azure AI Search RAG 前提）
 
 - 既存実装の方針を踏襲する。
   - GUIはWinUI 3を用いる（既存の画面構成・操作フローを継続）。
-  - LLMとのやり取りはAzure OpenAI Chat Completionsを使用。ストリーミングは将来対応。従来のFoundry LocalやOn Your Dataは使用しない。
+  - LLMとのやり取りはOpenAI Chat Completionsを使用。ストリーミングは将来対応。従来のFoundry LocalやAzure OpenAI On Your Dataは使用しない。
   - RAGはAzure AI SearchのVectorizableTextQueryを用いたベクトル類似検索で関連記事を取得し、アプリ側でプロンプトへ合成する。
   - 文体カードはプロンプトの先頭ガイド（system相当）として適用。
 
@@ -25,10 +25,10 @@
 - アプリ層:
   - RetrievalService: Azure AI SearchでVectorizableTextQueryを利用して近傍ドキュメントを取得。
   - PromptBuilder（ChatModel内実装）: 文体カードとRAGの結果をユーザー要求に合成。
-  - ChatModel: Azure OpenAI Chat Completions REST APIを呼び出し、応答をUIへ反映。
+  - ChatModel: OpenAI Chat Completions .NET ライブラリを使用して、応答をUIへ反映。
 
 ### 動作シーケンス
-1. 起動後、ユーザーが使用するAzure OpenAIのデプロイメント（モデル）を選択し「モデルロード」。
+1. 起動後、ユーザーが使用するOpenAIのモデルを選択し「モデルロード」。
 2. ユーザーが記事のポイント/概要を入力。
 3. 送信時、アプリは以下を順に実施：
    - 文体カード（appsettings.json）を読み込み、ガイドラインをsystemとしてセット。
@@ -48,20 +48,18 @@
 - 構成は要約→前提→本文→結論。
 
 ### エラーハンドリング/タイムアウト
-- Chat Completions/APIのタイムアウトはAzureOpenAI:RequestTimeoutSecondsに従う。
+- Chat Completions/APIのタイムアウトはOpenAI:RequestTimeoutSecondsに従う。
 - 検索の閾値はAzureAISearch:MinimumScoreを利用。
 
 ---
 
 ## appsettings.json で入力が必要なパラメータ
 
-- AzureOpenAI（必須）
-  - AzureOpenAI:Endpoint: https://<your-aoai>.openai.azure.com
-  - AzureOpenAI:ApiKey: Azure OpenAIのAPIキー
-  - AzureOpenAI:DeploymentName: 使用するChat Completionsのデプロイ名（例: "gpt-4o-mini"等）
-  - AzureOpenAI:ApiVersion: 使用するAPIバージョン（例: "2024-06-01"）
-  - AzureOpenAI:MaxTokens: 応答の最大トークン数（例: 2048〜4096）
-  - AzureOpenAI:RequestTimeoutSeconds: 推論要求のタイムアウト（秒）。0以下は無制限。
+- OpenAI（必須）
+  - OpenAI:ApiKey: OpenAIのAPIキー
+  - OpenAI:Model: 使用するモデル名（例: "gpt-4o-mini", "gpt-4o" 等）
+  - OpenAI:MaxTokens: 応答の最大トークン数（例: 2048〜4096）
+  - OpenAI:RequestTimeoutSeconds: 推論要求のタイムアウト（秒）。0以下は無制限。
 - StyleCard（文体カードをMarkdown文字列で与える）
   - StyleCard:Content: 文体カード本文（Markdown）。改行は \n で記述。
   - StyleCard:Title: 任意。文体カード名。
@@ -78,11 +76,12 @@
 ### appsettings.json サンプル
 ```json
 {
-  "AzureOpenAI": {
-    "Endpoint": "https://<your-aoai>.openai.azure.com",
-    "ApiKey": "<your-aoai-key>",
-    "DeploymentName": "gpt-4o-mini",
-    "ApiVersion": "2024-06-01",
+  "LLM": {
+    "Provider": "OpenAI"
+  },
+  "OpenAI": {
+    "ApiKey": "<your-openai-key>",
+    "Model": "gpt-4o-mini",
     "MaxTokens": 2048,
     "RequestTimeoutSeconds": 0
   },
