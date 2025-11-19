@@ -99,7 +99,8 @@ namespace blog_draft_learn_and_suggest.Models
             _history.Clear();
             var styleTitle = _configuration["StyleCard:Title"];
             var styleContent = _configuration["StyleCard:Content"];
-            var guide = BuildSystemGuide(styleTitle, styleContent);
+            var systemPrompt = _configuration["StyleCard:SystemPrompt"];
+            var guide = BuildSystemGuide(systemPrompt, styleTitle, styleContent);
             if (!string.IsNullOrWhiteSpace(guide))
             {
                 _history.Add(ChatMessage.CreateSystemMessage(guide));
@@ -195,10 +196,10 @@ namespace blog_draft_learn_and_suggest.Models
             }
         }
 
-        private static string BuildSystemGuide(string? title, string? styleMarkdown)
+        private static string BuildSystemGuide(string? systemPrompt, string? title, string? styleMarkdown)
         {
             var parts = new List<string>();
-            parts.Add("あなたは、特定の記事群を作成したテックブロガーです。文体カード及び過去の記事いくつかをコンテキストに含めるので、それらの特徴と同じように、新たな記事の下書きを作成してください。出力は常にMarkdownで行い、図が必要ならMermaid.jsで示してください。");
+            if (!string.IsNullOrWhiteSpace(systemPrompt)) parts.Add(systemPrompt);
             if (!string.IsNullOrWhiteSpace(title)) parts.Add($"# 文体カード: {title}");
             if (!string.IsNullOrWhiteSpace(styleMarkdown)) parts.Add(styleMarkdown);
             return string.Join("\n\n", parts);
