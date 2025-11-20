@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OpenAI;
@@ -166,15 +167,33 @@ namespace blog_draft_learn_and_suggest.Models
 
                 ResultChanged?.Invoke("[Start]\n");
 
-                var options = new ChatCompletionOptions
+                // Use protocol method to support new parameters not yet in SDK properties
+                var messagesPayload = _history.Select<ChatMessage, object?>(m =>
                 {
-                    MaxOutputTokenCount = _maxTokens
+                    if (m is SystemChatMessage sys) return new { role = "system", content = sys.Content[0].Text };
+                    if (m is UserChatMessage user) return new { role = "user", content = user.Content[0].Text };
+                    if (m is AssistantChatMessage asst) return new { role = "assistant", content = asst.Content[0].Text };
+                    return null;
+                }).Where(x => x != null).ToArray();
+
+                var requestPayload = new
+                {
+                    model = _activeModelName,
+                    messages = messagesPayload,
+                    max_completion_tokens = _maxTokens,
+                    reasoning_effort = "medium",
+                    verbosity = "medium",
+                    prompt_cache_retention = "24h"
                 };
 
-                _logger.LogDebug("Sending chat completion request with {MessageCount} messages", _history.Count);
+                _logger.LogDebug("Sending chat completion request (protocol) with {MessageCount} messages", _history.Count);
 
-                var completion = await _chatClient.CompleteChatAsync(_history, options);
-                var responseMessage = completion.Value.Content.FirstOrDefault()?.Text;
+                using var content = BinaryContent.Create(BinaryData.FromObjectAsJson(requestPayload));
+                var response = await _chatClient.CompleteChatAsync(content);
+
+                using var doc = JsonDocument.Parse(response.GetRawResponse().Content.ToMemory());
+                var root = doc.RootElement;
+                var responseMessage = root.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
 
                 if (!string.IsNullOrEmpty(responseMessage))
                 {
@@ -183,8 +202,9 @@ namespace blog_draft_learn_and_suggest.Models
                 }
                 else
                 {
-                    ResultChanged?.Invoke("(no content)\n");
-                    _logger.LogWarning("Completion response has no content.");
+                    var rawJson = doc.RootElement.ToString();
+                    ResultChanged?.Invoke($"(no content)\nRaw Response:\n{rawJson}\n");
+                    _logger.LogWarning("Completion response has no content. Raw: {RawJson}", rawJson);
                 }
 
                 ResultChanged?.Invoke("\n[End]\n");
