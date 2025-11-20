@@ -47,6 +47,12 @@ namespace blog_draft_learn_and_suggest.Models
             public bool IsCached { get; set; }
         }
 
+        public class ChatParameter
+        {
+            public string Key { get; set; } = string.Empty;
+            public string Value { get; set; } = string.Empty;
+        }
+
         public ChatModel(IConfiguration configuration, RetrievalService retrieval, ILogger<ChatModel> logger)
         {
             _configuration = configuration;
@@ -90,6 +96,12 @@ namespace blog_draft_learn_and_suggest.Models
             if (timeoutSeconds > 0)
             {
                 options.NetworkTimeout = TimeSpan.FromSeconds(timeoutSeconds);
+            }
+
+            var baseUrl = _configuration["OpenAI:BaseUrl"];
+            if (!string.IsNullOrWhiteSpace(baseUrl))
+            {
+                options.Endpoint = new Uri(baseUrl);
             }
 
             _openAIClient = new OpenAIClient(new ApiKeyCredential(apiKey), options);
@@ -176,15 +188,24 @@ namespace blog_draft_learn_and_suggest.Models
                     return null;
                 }).Where(x => x != null).ToArray();
 
-                var requestPayload = new
+                var requestPayload = new Dictionary<string, object>
                 {
-                    model = _activeModelName,
-                    messages = messagesPayload,
-                    max_completion_tokens = _maxTokens,
-                    reasoning_effort = "medium",
-                    verbosity = "medium",
-                    prompt_cache_retention = "24h"
+                    ["model"] = _activeModelName,
+                    ["messages"] = messagesPayload,
+                    ["max_completion_tokens"] = _maxTokens
                 };
+
+                var parameters = _configuration.GetSection("OpenAI:Parameters").Get<List<ChatParameter>>();
+                if (parameters != null)
+                {
+                    foreach (var p in parameters)
+                    {
+                        if (!string.IsNullOrWhiteSpace(p.Key))
+                        {
+                            requestPayload[p.Key] = p.Value;
+                        }
+                    }
+                }
 
                 _logger.LogDebug("Sending chat completion request (protocol) with {MessageCount} messages", _history.Count);
 
