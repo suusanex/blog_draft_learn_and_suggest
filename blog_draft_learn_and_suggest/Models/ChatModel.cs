@@ -230,6 +230,48 @@ namespace blog_draft_learn_and_suggest.Models
 
                 ResultChanged?.Invoke("\n[End]\n");
             }
+            catch (ClientResultException cre)
+            {
+                var rawResponse = cre.GetRawResponse();
+                string? responseBody = null;
+                string? requestId = null;
+                string? reason = null;
+
+                if (rawResponse != null)
+                {
+                    reason = rawResponse.ReasonPhrase;
+
+                    if (rawResponse.Headers.TryGetValue("x-request-id", out var headerValue))
+                    {
+                        requestId = headerValue;
+                    }
+
+                    try
+                    {
+                        responseBody = rawResponse.Content.ToString();
+                    }
+                    catch (Exception contentEx)
+                    {
+                        _logger.LogDebug(contentEx, "Failed to read error response content.");
+                    }
+                }
+
+                var detailBuilder = new StringBuilder();
+                detailBuilder.AppendLine("Chat completion request failed.");
+                detailBuilder.AppendLine($"Status: {cre.Status}");
+                detailBuilder.AppendLine($"Message: {cre.Message}");
+                if (!string.IsNullOrWhiteSpace(reason)) detailBuilder.AppendLine($"Reason: {reason}");
+                if (!string.IsNullOrWhiteSpace(requestId)) detailBuilder.AppendLine($"RequestId: {requestId}");
+                if (!string.IsNullOrWhiteSpace(responseBody))
+                {
+                    detailBuilder.AppendLine("Response Body:");
+                    detailBuilder.AppendLine(responseBody);
+                }
+
+                var detail = detailBuilder.ToString();
+                ResultChanged?.Invoke(detail + "\n");
+                _logger.LogError(cre, "Chat completion failed. Status={Status}, RequestId={RequestId}, Reason={Reason}, BodyLength={BodyLength}", cre.Status, requestId, reason, responseBody?.Length ?? 0);
+            }
             catch (Exception ex)
             {
                 ResultChanged?.Invoke($"Error generating response: {ex.Message}\n");
